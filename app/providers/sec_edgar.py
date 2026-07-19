@@ -130,12 +130,15 @@ class SecEdgarAdapter(ProviderAdapter):
                     prev = best.get(end)
                     if prev is None or filed > prev[0]:
                         best[end] = (filed, val)
+                # Filers switch tags between years (e.g. Revenues →
+                # RevenueFromContractWithCustomerExcludingAssessedTax), so every
+                # candidate tag is merged rather than stopping at the first one
+                # that matched anything. Precedence is per period: an earlier tag
+                # already holding that period wins, later tags only fill gaps.
                 for end, (_, val) in best.items():
                     periods.setdefault(end, {})
                     if canonical not in periods[end]:
                         periods[end][canonical] = val
-                if any(canonical in items for items in periods.values()):
-                    break  # first tag with data wins for this canonical key
 
         out = [
             StatementPeriodDTO(
