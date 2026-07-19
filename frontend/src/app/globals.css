@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+/* ── Institutional design tokens — dark-first terminal aesthetic ────────── */
+:root {
+  --bg: #09090b;
+  --surface: #0e0e11;
+  --surface-2: #131318;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text: #e6e6ea;
+  --text-muted: #8b8b96;
+  --text-faint: #55555f;
+  --up: #34d399;
+  --down: #fb7185;
+  --accent: #818cf8;
+  --warn: #fbbf24;
+  --grid-line: rgba(255, 255, 255, 0.035);
+}
+
+:root.light {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-2: #f4f4f5;
+  --border: rgba(0, 0, 0, 0.09);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --text: #18181b;
+  --text-muted: #63636b;
+  --text-faint: #a1a1aa;
+  --up: #059669;
+  --down: #e11d48;
+  --accent: #4f46e5;
+  --warn: #b45309;
+  --grid-line: rgba(0, 0, 0, 0.04);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--text);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --color-accent: var(--accent);
+  --color-warn: var(--warn);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jbmono), ui-monospace, "SF Mono", monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* every number in the product is tabular */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* faint engineering grid behind hero sections */
+.bg-grid {
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+.bg-grid-fade {
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, black 30%, transparent 75%);
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, black 30%, transparent 75%);
+}
+
+/* micro-label used across the terminal */
+.label {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* hairline card */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.panel-hover {
+  transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+.panel-hover:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+/* ticker tape marquee */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.animate-marquee {
+  animation: marquee 45s linear infinite;
+}
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* blinking live dot */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.live-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* thin scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar { height: 8px; width: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* presentation / print mode: charts and tables only */
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; color: black; }
+  .panel { border-color: #ddd; break-inside: avoid; }
+}

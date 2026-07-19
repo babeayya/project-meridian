@@ -1,0 +1,71 @@
+# Full production stack: Postgres + Redis + API + Celery worker + frontend.
+# Runs the whole platform on any Docker host, and locally for prod testing:
+#   docker compose up --build
+# then open http://localhost:3000
+#
+# For a real domain, change the two URLs marked <<< below (the API base baked
+# into the frontend at build time, and the CORS origin the API accepts) and put
+# a TLS reverse proxy (Caddy/nginx/Traefik) in front.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: equity_research
+    volumes: [pgdata:/var/lib/postgresql/data]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d equity_research"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      ENV: prod
+      DATABASE_URL: postgresql+asyncpg://app:app@postgres:5432/equity_research
+      REDIS_URL: redis://redis:6379/0
+      CORS_ORIGINS: http://localhost:3000   # <<< your frontend origin in prod
+      PORT: 8000
+    ports: ["8000:8000"]
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: .
+    command: celery -A app.workers.celery_app:celery_app worker -l info -Q ingestion
+    env_file: .env
+    environment:
+      ENV: prod
+      DATABASE_URL: postgresql+asyncpg://app:app@postgres:5432/equity_research
+      REDIS_URL: redis://redis:6379/0
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked in at build time — must be the URL the BROWSER uses to reach the
+        # API (not the internal docker hostname). <<< change for a real domain.
+        NEXT_PUBLIC_API_BASE: http://localhost:8000/api/v1
+    ports: ["3000:3000"]
+    restart: unless-stopped
+    depends_on: [api]
+
+volumes:
+  pgdata:

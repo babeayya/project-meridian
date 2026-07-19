@@ -1,0 +1,22 @@
+# keep secrets and local cruft out of the backend image / build context
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.sqlite3
+*.db
+equity_research.db
+.git/
+.gitignore
+frontend/
+docs/
+server*.log
+scratchpad/
+*.md
+!README.md
