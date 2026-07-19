@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 
 def build_engine(database_url: str, echo: bool = False) -> AsyncEngine:
@@ -19,10 +20,12 @@ def build_engine(database_url: str, echo: bool = False) -> AsyncEngine:
         # Managed Postgres hosts (Vercel Postgres, Neon, Supabase, Render, Railway)
         # require TLS; asyncpg needs it passed as a connect kwarg, not a URL query param.
         kwargs["connect_args"] = {"ssl": True}
-        # Serverless functions get a fresh process per cold start — never hold
-        # idle pooled connections across invocations.
-        kwargs["pool_size"] = 1
-        kwargs["max_overflow"] = 0
+        # NullPool, not a sized pool: a serverless process is frozen between
+        # invocations, so pooled sockets go stale, and any fixed ceiling
+        # deadlocks whenever one request needs two concurrent checkouts (the
+        # request session plus the provider call logger). Connect per checkout
+        # and let the managed host's own pooler do the pooling.
+        kwargs["poolclass"] = NullPool
     return create_async_engine(database_url, **kwargs)
 
 
