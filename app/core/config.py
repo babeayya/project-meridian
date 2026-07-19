@@ -1,7 +1,8 @@
 """Application settings. Every secret comes from the environment / .env file."""
 from functools import lru_cache
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,26 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./equity_research.db"
     # 'memory://' selects the in-process control plane (no Redis needed in dev).
     redis_url: str = "memory://"
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_database_url(cls, v: str) -> str:
+        """Managed Postgres hosts (Vercel Postgres, Neon, Supabase, Railway,
+        Render) hand out plain postgres:// / postgresql:// URLs with a
+        psycopg-style ?sslmode=require query param. Rewrite to the asyncpg
+        driver and drop sslmode, which asyncpg's DBAPI doesn't understand —
+        TLS is negotiated separately in database.py's connect_args."""
+        if v.startswith("postgres://"):
+            v = "postgresql://" + v[len("postgres://"):]
+        if v.startswith("postgresql://"):
+            v = "postgresql+asyncpg://" + v[len("postgresql://"):]
+        if v.startswith("postgresql+asyncpg://"):
+            parts = urlsplit(v)
+            query = dict(parse_qsl(parts.query))
+            query.pop("sslmode", None)
+            query.pop("channel_binding", None)
+            v = urlunsplit(parts._replace(query=urlencode(query)))
+        return v
 
     # Comma-separated API keys the frontend may present via X-API-Key.
     # Empty ⇒ auth disabled (dev only; startup logs a warning outside dev).

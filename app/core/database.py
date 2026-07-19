@@ -15,6 +15,14 @@ def build_engine(database_url: str, echo: bool = False) -> AsyncEngine:
     if database_url.startswith("sqlite"):
         # single-writer engine: brief lock grace for overlapping requests
         kwargs["connect_args"] = {"timeout": 5}
+    elif database_url.startswith("postgresql+asyncpg"):
+        # Managed Postgres hosts (Vercel Postgres, Neon, Supabase, Render, Railway)
+        # require TLS; asyncpg needs it passed as a connect kwarg, not a URL query param.
+        kwargs["connect_args"] = {"ssl": True}
+        # Serverless functions get a fresh process per cold start — never hold
+        # idle pooled connections across invocations.
+        kwargs["pool_size"] = 1
+        kwargs["max_overflow"] = 0
     return create_async_engine(database_url, **kwargs)
 
 
