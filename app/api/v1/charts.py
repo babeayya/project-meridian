@@ -71,12 +71,19 @@ async def dcf_waterfall(company_id: uuid.UUID, session=Depends(get_session),
         raise EntityNotFound("No successful dcf_fcff run — POST /valuations/dcf-fcff first")
     o = run.outputs
     ev = Decimal(o["ev"])
+    net_debt = Decimal(o.get("net_debt", "0"))
+    # net_debt > 0 subtracts from EV (levered); net_debt < 0 is a net-cash
+    # position that adds to EV — label and color must follow the sign.
+    debt_block = (
+        {"label": "Net debt", "value": str(-net_debt), "type": "subtract"}
+        if net_debt >= 0 else
+        {"label": "Net cash", "value": str(-net_debt), "type": "add"}
+    )
     blocks = [
         {"label": "PV of explicit FCFF", "value": o["pv_explicit"], "type": "add"},
         {"label": "PV of terminal value", "value": o["pv_terminal"], "type": "add"},
         {"label": "Enterprise value", "value": o["ev"], "type": "subtotal"},
-        {"label": "Net debt", "value": str(-Decimal(o.get("net_debt", "0"))),
-         "type": "subtract"},
+        debt_block,
         {"label": "Equity value", "value": o["equity_value"], "type": "subtotal"},
         {"label": "Fair value / share",
          "value": str(run.fair_value_per_share), "type": "result"},

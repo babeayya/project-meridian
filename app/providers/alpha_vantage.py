@@ -22,6 +22,7 @@ BASE_URL = "https://www.alphavantage.co/query"
 REGION_MAP = {
     "United States": (Region.US, "NASDAQ"),
     "India/Bombay": (Region.IN, "BSE"),
+    "India/National": (Region.IN, "NSE"),
     "United Kingdom": (Region.GLOBAL, "LSE"),
 }
 
