@@ -141,6 +141,11 @@ class ValuationService:
             f"{erp} — mature-market 5% (+150bp India country premium)"
             if region == Region.IN else f"{erp} — mature-market baseline")
 
+        wacc_inputs = WaccInputs(risk_free_rate=rf, beta=beta,
+                                 equity_risk_premium=erp, cost_of_debt=kd,
+                                 tax_rate=tax, market_cap=market_cap,
+                                 total_debt=total_debt, rf_source=rf_source,
+                                 beta_source=beta_source)
         assumptions = AssumptionSet(
             forecast_years=years, revenue_growth=growth_path,
             ebit_margin=margin_path, tax_rate=tax, da_pct_revenue=da_pct,
@@ -148,14 +153,18 @@ class ValuationService:
             nwc_pct_revenue_delta=Decimal("0.02"),
             terminal_growth=terminal_g, shares_diluted=shares, net_debt=nd,
             minority_interest=latest.get("minority_interest") or Decimal(0),
-            wacc=WaccInputs(risk_free_rate=rf, beta=beta,
-                            equity_risk_premium=erp, cost_of_debt=kd,
-                            tax_rate=tax, market_cap=market_cap,
-                            total_debt=total_debt, rf_source=rf_source,
-                            beta_source=beta_source),
+            wacc=wacc_inputs,
             derivation=derivation,
         )
         derivation["nwc_pct_revenue_delta"] = "default 2% of incremental revenue"
+
+        from app.domain.valuation.wacc import wacc as wacc_calc
+        wacc_node = wacc_calc(wacc_inputs)
+        derivation["wacc"] = f"{wacc_node.result} — {wacc_node.explanation}"
+        derivation["forecast_horizon"] = (
+            f"{years}y explicit forecast (revenue growth fades from {base_g:.1%} "
+            f"toward the {terminal_g:.1%} terminal rate); Gordon-growth terminal "
+            f"value applied from year {years + 1} onward")
         return assumptions, derivation
 
     async def _beta(self, company_id: uuid.UUID, region: Region) -> tuple[Decimal, str]:

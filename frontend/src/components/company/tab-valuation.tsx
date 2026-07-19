@@ -94,9 +94,11 @@ function DcfPlayground({ id }: { id: string }) {
       <PanelHeader
         title="DCF playground"
         right={a && (
-          <span className="text-[10px] text-faint">
-            defaults derived from history · rf {pct(a.wacc.risk_free_rate)} ({a.wacc.rf_source}) ·
-            β {parseFloat(a.wacc.beta).toFixed(2)}
+          <span className="text-[10px] text-faint" title={assumptions?.data.derivation.wacc}>
+            rf {pct(a.wacc.risk_free_rate)} ({a.wacc.rf_source}) · β {parseFloat(a.wacc.beta).toFixed(2)} ·
+            WACC {assumptions?.data.derivation.wacc?.split(" — ")[0]
+              ? pct(assumptions.data.derivation.wacc.split(" — ")[0]) : "—"} ·
+            {" "}{a.forecast_years}y explicit forecast, terminal from year {a.forecast_years + 1}
           </span>
         )}
       />
