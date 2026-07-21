@@ -105,12 +105,14 @@ def get_analysis_service(
 
 
 def get_valuation_service(
+    container: ContainerDep,
     session: SessionDep,
     financials: Annotated[FinancialsService, Depends(get_financials_service)],
     macro: Annotated[MacroService, Depends(get_macro_service)],
 ) -> ValuationService:
     return ValuationService(CompanyRepository(session), financials,
-                            ValuationRepository(session), macro)
+                            ValuationRepository(session), macro,
+                            container.registry)
 
 
 def get_news_service(container: ContainerDep, session: SessionDep) -> NewsService:

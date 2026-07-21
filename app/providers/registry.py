@@ -28,6 +28,8 @@ DEFAULT_CHAINS: dict[Capability, list[str]] = {
     # EDGAR is authoritative for US annuals; Yahoo covers global + quarterly
     Capability.STATEMENTS_ANNUAL: ["sec_edgar", "yahoo_fundamentals", "fmp"],
     Capability.STATEMENTS_QUARTERLY: ["yahoo_fundamentals", "fmp"],
+    # published beta, so the terminal agrees with the figure on the quote page
+    Capability.BETA: ["yahoo", "fmp"],
     Capability.DIVIDENDS: ["yahoo_fundamentals"],
     Capability.SPLITS: ["yahoo_fundamentals"],
     Capability.NEWS: ["newsapi", "gdelt", "yahoo_fundamentals"],

@@ -19,6 +19,7 @@ class Capability(StrEnum):
     OHLCV_DAILY = "ohlcv_daily"
     STATEMENTS_ANNUAL = "statements_annual"
     STATEMENTS_QUARTERLY = "statements_quarterly"
+    BETA = "beta"
     DIVIDENDS = "dividends"
     SPLITS = "splits"
     NEWS = "news"

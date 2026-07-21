@@ -6,12 +6,6 @@ from decimal import Decimal
 import structlog
 
 from app.core.errors import AppError, EntityNotFound
-from app.domain.quant.engine import (
-    MIN_BETA_OBSERVATIONS,
-    PriceSeries,
-    capm,
-    daily_log_returns,
-)
 from app.domain.statements.classification import is_financial
 from app.domain.statements.history import FinancialHistory
 from app.domain.valuation.advanced import (
@@ -26,7 +20,8 @@ from app.domain.valuation.base import AssumptionSet, ValuationOutcome, WaccInput
 from app.domain.valuation.dcf import dcf_fcfe, dcf_fcff
 from app.domain.valuation.equity_models import asset_based, ddm, eva, residual_income
 from app.domain.valuation.relative import historical_multiples
-from app.providers.base import Region, region_for_exchange
+from app.providers.base import Capability, Region, SymbolRef, region_for_exchange
+from app.providers.registry import ProviderRegistry
 from app.repositories.company import CompanyRepository
 from app.repositories.valuation import ValuationRepository
 from app.services.financials import FinancialsService
@@ -54,16 +49,24 @@ ENTERPRISE_ON_FINANCIAL_WARNING = (
 )
 FINANCIAL_CONFIDENCE_FACTOR = 0.5
 
+# Providers occasionally publish a placeholder or a stale outlier. Equity betas
+# outside this band are not credible for a listed operating company, so they are
+# rejected rather than propagated into WACC.
+BETA_SANITY_MIN = Decimal("0.1")
+BETA_SANITY_MAX = Decimal("4.0")
+
 
 class ValuationService:
     def __init__(self, companies: CompanyRepository,
                  financials: FinancialsService,
                  valuations: ValuationRepository,
-                 macro: MacroService) -> None:
+                 macro: MacroService,
+                 registry: ProviderRegistry) -> None:
         self.companies = companies
         self.financials = financials
         self.valuations = valuations
         self.macro = macro
+        self.registry = registry
 
     # ---------- default assumptions ----------
 
@@ -223,46 +226,34 @@ class ValuationService:
                 "EBIT (pre-tax + interest expense)")
 
     async def _beta(self, company_id: uuid.UUID, region: Region) -> tuple[Decimal, str]:
-        stock = await self.financials.price_series(company_id, days=750)
-        if stock is None or len(stock.closes) < MIN_BETA_OBSERVATIONS:
-            n = 0 if stock is None else len(stock.closes)
-            return (Decimal("1.0"),
-                    f"assumption:default (insufficient price history, {n} sessions)")
+        """Beta as published by the data providers, not regressed here.
+
+        Fitting our own left the terminal disagreeing with every screen the
+        user could check it against, and the fit was fragile: a throttled
+        benchmark response collapsed the overlap and produced 0.23 for JPM
+        against a published 0.98. The provider chain (Yahoo → FMP) is the
+        source of record; the rolling/CAPM regressions in the quant tab remain
+        as analytics, clearly labelled as our own.
+        """
+        listing = await self.companies.primary_listing(company_id)
+        if listing is None:
+            return Decimal("1.0"), "assumption:default (no listing)"
+        ref = SymbolRef(ticker=listing.ticker, exchange=listing.exchange,
+                        yahoo_symbol=listing.yahoo_symbol, region=region)
         try:
-            bench_raw = await self.macro.benchmark_series(region, "2y")
-            from datetime import UTC, datetime
-            pairs = [(datetime.fromtimestamp(t, tz=UTC).date(), c)
-                     for t, c in zip(bench_raw["timestamps"], bench_raw["closes"],
-                                     strict=False)
-                     if c is not None]
-            bench = PriceSeries(dates=[d for d, _ in pairs],
-                                closes=[c for _, c in pairs])
-            from app.domain.quant.engine import align
-            ra, rb = align(stock, bench)
-            model = capm(ra, rb, 0.04)
-            # A truncated benchmark response (Yahoo throttles, and a 2y request
-            # can come back with a couple of months) silently collapses the
-            # overlap, and a beta fitted to that is not merely noisy but
-            # biased: JPM measures 0.23 over 60 sessions against 0.95 over 499.
-            # That feeds WACC and every DCF, so a short overlap is treated as a
-            # failed fetch rather than a usable estimate.
-            if model and model.observations < MIN_BETA_OBSERVATIONS:
-                log.warning("beta_window_too_short", company_id=str(company_id),
-                            observations=model.observations,
-                            benchmark=bench_raw["symbol"])
-                return (Decimal("1.0"),
-                        f"assumption:default (only {model.observations} sessions "
-                        f"overlapped {bench_raw['symbol']}; "
-                        f"≥{MIN_BETA_OBSERVATIONS} required for a stable fit)")
-            if model:
-                return (Decimal(str(model.beta)),
-                        f"computed:{model.observations}d daily OLS vs "
-                        f"{bench_raw['symbol']} (R²={model.r_squared})")
+            beta, source = await self.registry.call(
+                Capability.BETA, region, "beta", ref=ref)
         except Exception as exc:
-            log.warning("beta_computation_failed", error=str(exc)[:200])
-        vol = daily_log_returns(stock)
-        return (Decimal("1.0"),
-                f"assumption:default (benchmark unavailable, n={len(vol)})")
+            log.warning("beta_lookup_failed", company_id=str(company_id),
+                        error=str(exc)[:200])
+            return Decimal("1.0"), "assumption:default (no published beta available)"
+        if not (BETA_SANITY_MIN <= beta <= BETA_SANITY_MAX):
+            log.warning("beta_out_of_range", company_id=str(company_id),
+                        beta=str(beta), source=source)
+            return (Decimal("1.0"),
+                    f"assumption:default ({source} published {beta}, outside "
+                    f"[{BETA_SANITY_MIN}, {BETA_SANITY_MAX}])")
+        return beta, f"published:{source}"
 
     # ---------- model execution ----------
 

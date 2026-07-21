@@ -19,6 +19,9 @@ from app.providers.base import (
 
 SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb"
+COOKIE_URL = "https://fc.yahoo.com/"
 
 # Yahoo requires a browser-like UA; default python UA gets 429/403.
 HEADERS = {
@@ -51,10 +54,15 @@ def _range_for(lookback_days: int) -> str:
 class YahooAdapter(ProviderAdapter):
     name = "yahoo"
     capabilities = frozenset(
-        {Capability.SYMBOL_SEARCH, Capability.OHLCV_DAILY, Capability.QUOTE}
+        {Capability.SYMBOL_SEARCH, Capability.OHLCV_DAILY, Capability.QUOTE,
+         Capability.BETA}
     )
     regions = frozenset({Region.GLOBAL})
     rate_limit = RateLimit(per_minute=30, per_day=5000)
+
+    def __init__(self, http) -> None:  # type: ignore[no-untyped-def]
+        super().__init__(http)
+        self._crumb_cache: str | None = None
 
     def _symbol(self, ref: SymbolRef) -> str:
         if ref.yahoo_symbol:
@@ -91,6 +99,52 @@ class YahooAdapter(ProviderAdapter):
                 score=float(q.get("score", 0)),
             ))
         return out
+
+    async def _crumb(self, refresh: bool = False) -> str:
+        """quoteSummary is the only Yahoo surface we use that is gated: it needs
+        a session cookie plus a matching crumb, or it answers 401. The pair is
+        cached on the adapter — minting one per request would burn the rate
+        limit twice over."""
+        if self._crumb_cache and not refresh:
+            return self._crumb_cache
+        try:
+            # sets the A1/A3 cookies on the shared client; the response itself
+            # is a 404 and is meant to be
+            await self.http.get(COOKIE_URL, headers=HEADERS, attempts=1)
+        except Exception:  # noqa: BLE001 — only the cookies matter
+            pass
+        crumb = (await self.http.get_text(CRUMB_URL, headers=HEADERS)).strip()
+        if not crumb or "<" in crumb:
+            raise ProviderError(self.name, "could not obtain a quoteSummary crumb")
+        self._crumb_cache = crumb
+        return crumb
+
+    async def beta(self, ref: SymbolRef) -> Decimal:
+        """Yahoo's published beta (5y monthly vs the local benchmark) — the same
+        figure shown on the quote page, so the terminal agrees with what a user
+        sees elsewhere rather than presenting its own regression."""
+        symbol = self._symbol(ref)
+        for attempt in range(2):                    # a stale crumb 401s once
+            crumb = await self._crumb(refresh=attempt > 0)
+            try:
+                data = await self.http.get_json(
+                    QUOTE_SUMMARY_URL.format(symbol=symbol),
+                    params={"modules": "defaultKeyStatistics", "crumb": crumb},
+                    headers=HEADERS,
+                )
+            except Exception:
+                if attempt:
+                    raise
+                continue
+            results = (data.get("quoteSummary") or {}).get("result") or []
+            if not results:
+                raise ProviderError(self.name, f"no quoteSummary for {symbol}")
+            raw = (results[0].get("defaultKeyStatistics") or {}).get("beta")
+            value = raw.get("raw") if isinstance(raw, dict) else raw
+            if value is None:
+                raise ProviderError(self.name, f"no beta published for {symbol}")
+            return Decimal(str(value))
+        raise ProviderError(self.name, f"beta lookup failed for {symbol}")
 
     async def _chart(self, symbol: str, range_: str) -> dict:
         data = await self.http.get_json(

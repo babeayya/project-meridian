@@ -54,7 +54,8 @@ NEGATIVE_FLOWS = {"capex", "dividends_paid", "share_repurchase"}
 class FmpAdapter(ProviderAdapter):
     name = "fmp"
     capabilities = frozenset({Capability.STATEMENTS_ANNUAL,
-                              Capability.STATEMENTS_QUARTERLY})
+                              Capability.STATEMENTS_QUARTERLY,
+                              Capability.BETA})
     regions = frozenset({Region.GLOBAL})
     rate_limit = RateLimit(per_minute=10, per_day=240)
 
@@ -78,6 +79,19 @@ class FmpAdapter(ProviderAdapter):
         if isinstance(data, dict):  # error payloads are dicts
             raise ProviderError(self.name, str(data)[:200])
         return data
+
+    async def beta(self, ref: SymbolRef) -> Decimal:
+        """Published beta from the company profile — the fallback for when
+        Yahoo's gated quoteSummary is unavailable."""
+        symbol = self._symbol(ref)
+        data = await self.http.get_json(
+            f"{BASE}/profile", params={"symbol": symbol, "apikey": self.api_key},
+        )
+        if isinstance(data, dict):
+            raise ProviderError(self.name, str(data)[:200])
+        if not data or data[0].get("beta") is None:
+            raise ProviderError(self.name, f"no beta published for {symbol}")
+        return Decimal(str(data[0]["beta"]))
 
     async def statements(self, ref: SymbolRef, period_type: str,
                          cik: str | None = None) -> list[StatementPeriodDTO]:
