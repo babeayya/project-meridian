@@ -16,6 +16,13 @@ log = structlog.get_logger(__name__)
 RANGE_DAYS = {"1m": 31, "3m": 93, "6m": 186, "1y": 366, "2y": 731,
               "5y": 1827, "10y": 3653, "max": 14600}
 
+# The quant engines need far more history than any single chart range shows:
+# VaR needs ≥100 sessions, CAPM ≥60, rolling beta a 90d window on top of that.
+# Ingesting only the range the user happened to view first left listings
+# permanently stuck with ~60 bars, silently degrading beta to the 1.0 default
+# and blanking the risk panel. Every fetch now pulls at least 5y.
+MIN_HISTORY_DAYS = RANGE_DAYS["5y"]
+
 
 class PriceIngestionService:
     def __init__(self, companies: CompanyRepository, prices: PriceRepository,
@@ -36,7 +43,7 @@ class PriceIngestionService:
             yahoo_symbol=listing.yahoo_symbol,
             region=region_for_exchange(listing.exchange),
         )
-        lookback = RANGE_DAYS.get(range_, RANGE_DAYS["5y"])
+        lookback = max(RANGE_DAYS.get(range_, RANGE_DAYS["5y"]), MIN_HISTORY_DAYS)
 
         bars, price_source = await self.registry.call(
             Capability.OHLCV_DAILY, ref.region, "daily_ohlcv",
