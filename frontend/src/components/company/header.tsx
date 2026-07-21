@@ -27,12 +27,10 @@ export function CompanyHeader({ company }: { company: CompanyProfile }) {
   const currency = q?.currency ?? listing?.currency ?? company.reporting_currency;
   const watched = watchlist.some((w) => w.id === company.id);
 
-  // blended intrinsic view from stored runs (only ok models)
+  // blended intrinsic from stored runs — blended by the engine, not here, so
+  // this stat cannot drift from the valuation tab's number
   const models = bridge?.data.models ?? [];
-  const blended = models.length
-    ? models.reduce((s, m) => s + parseFloat(m.fair_value) * m.confidence, 0) /
-      models.reduce((s, m) => s + m.confidence, 0)
-    : null;
+  const blended = bridge?.data.blended?.fair_value ?? null;
   const priceNum = q ? parseFloat(q.price) : null;
   const mos = blended && priceNum ? 1 - priceNum / blended : null;
   const avgConfidence = models.length

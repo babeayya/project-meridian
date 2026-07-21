@@ -323,6 +323,14 @@ export interface WaterfallChart {
 export interface BridgeChart {
   price: string | null;
   currency: string;
+  /** Confidence × model-weight blend, computed by the engine so the header
+   *  and the valuation tab cannot disagree on the same runs. */
+  blended: {
+    fair_value: number;
+    range_low: number;
+    range_high: number;
+    method: string;
+  } | null;
   models: {
     model: string;
     fair_value: string;

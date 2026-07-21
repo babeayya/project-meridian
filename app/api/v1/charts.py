@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_analysis_service, get_financials_service, get_session
 from app.core.errors import EntityNotFound
+from app.domain.valuation.advanced import summarize
+from app.domain.valuation.base import ValuationOutcome
 from app.repositories.valuation import ValuationRepository
 from app.schemas.common import envelope
 from app.services.analysis import AnalysisService
@@ -101,9 +103,22 @@ async def valuation_bridge(company_id: uuid.UUID, session=Depends(get_session)) 
     ok = [r for r in runs if r.status == "ok" and r.fair_value_per_share]
     if not ok:
         raise EntityNotFound("No valuation runs — POST /valuations/... first")
+    # Blend here rather than in the client. The header used to reduce these
+    # runs itself weighting by confidence alone, which silently dropped the
+    # per-model weights and disagreed with /valuations/summary on the same
+    # inputs (JPM: 253.89 against 297.88) — two different headline numbers for
+    # one labelled concept. summarize() is the single definition.
+    blended = summarize(
+        [ValuationOutcome(model=r.model, fair_value_per_share=r.fair_value_per_share,
+                          currency=r.currency, low=r.low, high=r.high,
+                          confidence=r.confidence)
+         for r in ok],
+        price=None,
+    )["blended"]
     return envelope({
         "price": str(ok[0].price_at_run) if ok[0].price_at_run else None,
         "currency": ok[0].currency,
+        "blended": blended,
         "models": [{"model": r.model, "fair_value": str(r.fair_value_per_share),
                     "low": str(r.low) if r.low else None,
                     "high": str(r.high) if r.high else None,
