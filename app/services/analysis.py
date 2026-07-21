@@ -6,14 +6,14 @@ from app.core.errors import EntityNotFound
 from app.domain.quant import engine as quant
 from app.domain.ratios.engine import all_ratios, dupont
 from app.domain.scores import classic, factors
+from app.domain.statements.classification import (
+    is_financial,
+    sector_hints_manufacturer,
+)
 from app.providers.base import Region, region_for_exchange
 from app.repositories.company import CompanyRepository
 from app.services.financials import FinancialsService
 from app.services.macro import MacroService
-
-FINANCIAL_HINTS = ("bank", "insurance", "financial", "capital markets")
-MANUFACTURER_HINTS = ("manufactur", "industrial", "auto", "aerospace",
-                      "machinery", "chemicals", "materials", "hardware")
 
 
 class AnalysisService:
@@ -45,10 +45,17 @@ class AnalysisService:
             raise EntityNotFound("Insufficient data for DuPont decomposition")
         return node.to_dict()
 
-    def _company_flags(self, company) -> tuple[bool, bool]:
-        text = f"{company.sector or ''} {company.industry or ''}".lower()
-        return (any(h in text for h in FINANCIAL_HINTS),
-                any(h in text for h in MANUFACTURER_HINTS))
+    def _company_flags(self, company, history) -> tuple[bool, bool]:
+        """(is_financial, is_manufacturer) for Altman Z variant selection.
+
+        Financial status is read from the financials themselves — sector and
+        industry are never populated, so hint-matching alone always returned
+        False and every filer got the general-purpose Z-score.
+        """
+        sector = getattr(company, "sector", None)
+        industry = getattr(company, "industry", None)
+        return (is_financial(history, sector, industry),
+                sector_hints_manufacturer(sector, industry))
 
     async def scores(self, company_id: uuid.UUID) -> dict:
         company = await self.companies.get(company_id)
@@ -58,7 +65,7 @@ class AnalysisService:
         if history.latest is None:
             raise EntityNotFound("No fundamentals ingested — refresh first")
         market = await self.financials.market_inputs(company_id, history)
-        is_fin, is_mfg = self._company_flags(company)
+        is_fin, is_mfg = self._company_flags(company, history)
 
         altman = classic.altman_z(
             history.latest, market.market_cap if market else None, is_fin, is_mfg)

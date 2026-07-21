@@ -7,6 +7,7 @@ import structlog
 
 from app.core.errors import AppError, EntityNotFound
 from app.domain.quant.engine import PriceSeries, capm, daily_log_returns
+from app.domain.statements.classification import is_financial
 from app.domain.statements.history import FinancialHistory
 from app.domain.valuation.advanced import (
     expected_return,
@@ -31,7 +32,22 @@ log = structlog.get_logger(__name__)
 ENGINE_VERSION = "0.2.0"
 ONE = Decimal(1)
 
-FINANCIAL_SECTOR_HINTS = ("bank", "insurance", "financial", "capital markets")
+# Every model that values the firm by discounting enterprise cash flows —
+# directly, or by simulating/solving the same forecast. For a bank the split
+# between operating and financing cash flow is arbitrary and "net debt" has no
+# meaning, so all of these rest on an assumption that does not hold. They are
+# de-weighted rather than suppressed: dropping them would silently transfer the
+# whole blend onto the remaining models, which are no better calibrated here.
+ENTERPRISE_MODELS = frozenset({
+    "dcf_fcff", "eva", "scenario", "monte_carlo_dcf", "reverse_dcf",
+    "expected_return",
+})
+ENTERPRISE_ON_FINANCIAL_WARNING = (
+    "enterprise cash-flow framework is unreliable for financials — "
+    "operating and financing flows are not separable, and net debt is not "
+    "meaningful; prefer ddm / residual_income"
+)
+FINANCIAL_CONFIDENCE_FACTOR = 0.5
 
 
 class ValuationService:
@@ -79,13 +95,16 @@ class ValuationService:
         ]
 
         rev_by_fy = {fy: v for fy, v in history.series("revenue") if v}
-        margins = [(fy, ebit / rev_by_fy[fy])
-                   for fy, ebit in history.series("operating_income")
+        company = await self.companies.get(company_id)
+        lender = is_financial(history, getattr(company, "sector", None),
+                              getattr(company, "industry", None))
+        ebit_by_fy, ebit_basis = self._ebit_series(history, lender)
+        margins = [(fy, ebit / rev_by_fy[fy]) for fy, ebit in ebit_by_fy
                    if fy in rev_by_fy]
         if margins:
             recent = [m for _, m in margins[-3:]]
             base_margin = (sum(recent) / len(recent)).quantize(Decimal("0.0001"))
-            derivation["ebit_margin"] = f"3y average EBIT margin {base_margin}"
+            derivation["ebit_margin"] = f"3y average {ebit_basis} margin {base_margin}"
         else:
             base_margin = Decimal("0.12")
             derivation["ebit_margin"] = "no margin history — default 12%"
@@ -167,10 +186,45 @@ class ValuationService:
             f"value applied from year {years + 1} onward")
         return assumptions, derivation
 
+    @staticmethod
+    def _ebit_series(history: FinancialHistory,
+                     lender: bool) -> tuple[list[tuple[int, Decimal]], str]:
+        """EBIT per fiscal year, with a reconstruction for filers that report no
+        operating-income line. Banks and insurers (JPM, BAC, …) never tag
+        us-gaap:OperatingIncomeLoss, which used to leave the margin history
+        empty and drop the model onto its 12% placeholder.
+
+        For a lender, interest is a cost of revenue rather than a financing
+        charge, so it must not be added back — that would print a ~90% margin
+        for JPM. `lender` is expected to come from
+        `statements.classification.is_financial`, which reads the structure of
+        the financials rather than trusting sector metadata.
+
+        Returns (series, basis label) — the label is surfaced in the derivation
+        so the trace never passes a proxy off as a reported EBIT.
+        """
+        reported = history.series("operating_income")
+        if reported:
+            return reported, "EBIT"
+
+        pretax = history.series("pretax_income")
+        if not pretax:
+            return [], "EBIT"
+        if lender:
+            return pretax, "pre-tax (no operating-income line filed)"
+
+        interest = dict(history.series("interest_expense"))
+        return ([(fy, v + interest.get(fy, Decimal(0))) for fy, v in pretax],
+                "EBIT (pre-tax + interest expense)")
+
     async def _beta(self, company_id: uuid.UUID, region: Region) -> tuple[Decimal, str]:
         stock = await self.financials.price_series(company_id, days=750)
-        if stock is None or len(stock.closes) < 120:
-            return Decimal("1.0"), "assumption:default (insufficient price history)"
+        # capm() enforces its own ≥60-observation minimum; gating harder here
+        # only meant thinly-ingested listings silently reported β = 1.00
+        if stock is None or len(stock.closes) < 61:
+            n = 0 if stock is None else len(stock.closes)
+            return (Decimal("1.0"),
+                    f"assumption:default (insufficient price history, {n} sessions)")
         try:
             bench_raw = await self.macro.benchmark_series(region, "2y")
             from datetime import UTC, datetime
@@ -184,9 +238,12 @@ class ValuationService:
             ra, rb = align(stock, bench)
             model = capm(ra, rb, 0.04)
             if model:
+                # <1y of overlap is a noisy fit — still far better than the
+                # 1.0 placeholder, but the trace has to say so
+                short = " — short window" if model.observations < 250 else ""
                 return (Decimal(str(model.beta)),
-                        f"computed:2y daily OLS vs {bench_raw['symbol']} "
-                        f"(R²={model.r_squared})")
+                        f"computed:{model.observations}d daily OLS vs "
+                        f"{bench_raw['symbol']} (R²={model.r_squared}){short}")
         except Exception as exc:
             log.warning("beta_computation_failed", error=str(exc)[:200])
         vol = daily_log_returns(stock)
@@ -222,17 +279,13 @@ class ValuationService:
         price = await self.financials.price(company_id)
         a, set_id = await self._load_assumptions(company_id, assumption_set_id, overrides)
         company = await self.companies.get(company_id)
-        is_financial = any(h in (company.sector or "").lower()
-                           or h in (company.industry or "").lower()
-                           for h in FINANCIAL_SECTOR_HINTS) if company else False
+        outcome = await self._dispatch(model, history, a, price, company_id)
 
-        if model in ("dcf_fcff", "eva") and is_financial:
-            outcome = ValuationOutcome.na(
-                model, "enterprise cash-flow models are unreliable for "
-                       "financials — use ddm / residual_income instead",
-                history.currency)
-        else:
-            outcome = await self._dispatch(model, history, a, price, company_id)
+        if model in ENTERPRISE_MODELS and is_financial(
+                history, getattr(company, "sector", None),
+                getattr(company, "industry", None)):
+            outcome.caveat(ENTERPRISE_ON_FINANCIAL_WARNING,
+                           FINANCIAL_CONFIDENCE_FACTOR)
 
         run = await self.valuations.save_run(company_id, outcome, price, set_id,
                                              ENGINE_VERSION)

@@ -13,9 +13,26 @@ import { price as fmtPrice } from "@/lib/format";
 import { cn, downloadCsv } from "@/lib/utils";
 
 const RANGES = ["1m", "3m", "6m", "1y", "2y", "5y"] as const;
+type Range = (typeof RANGES)[number];
+
+/** Axis granularity has to track the window: a month of bars labelled by
+ *  month+year just repeats "Jun 26". Short ranges get day-first dates
+ *  ("26 Jun") so they never read as an ambiguous month-year. */
+const AXIS_FORMAT: Record<Range, Intl.DateTimeFormatOptions> = {
+  "1m": { day: "numeric", month: "short" },
+  "3m": { day: "numeric", month: "short" },
+  "6m": { day: "numeric", month: "short" },
+  "1y": { month: "short", year: "2-digit" },
+  "2y": { month: "short", year: "2-digit" },
+  "5y": { month: "short", year: "2-digit" },
+};
+const AXIS_LOCALE: Record<Range, string> = {
+  "1m": "en-GB", "3m": "en-GB", "6m": "en-GB",
+  "1y": "en-US", "2y": "en-US", "5y": "en-US",
+};
 
 export function PriceChart({ id, currency }: { id: string; currency?: string | null }) {
-  const [range, setRange] = useState<(typeof RANGES)[number]>("1y");
+  const [range, setRange] = useState<Range>("1y");
   const [fullscreen, setFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const { data, isLoading } = usePrices(id, range);
@@ -102,7 +119,7 @@ export function PriceChart({ id, currency }: { id: string; currency?: string | n
                 tickLine={false} axisLine={false}
                 minTickGap={60}
                 tickFormatter={(d: string) =>
-                  new Date(d).toLocaleDateString("en-US", { month: "short", year: "2-digit" })}
+                  new Date(d).toLocaleDateString(AXIS_LOCALE[range], AXIS_FORMAT[range])}
               />
               <YAxis
                 orientation="right"
@@ -116,7 +133,11 @@ export function PriceChart({ id, currency }: { id: string; currency?: string | n
                 content={({ active, payload, label }) =>
                   active && payload?.length ? (
                     <div className="rounded-md border border-line bg-surface px-3 py-2 text-xs shadow-xl">
-                      <div className="text-faint">{label as string}</div>
+                      <div className="text-faint">
+                        {new Date(label as string).toLocaleDateString("en-US", {
+                          day: "numeric", month: "short", year: "numeric",
+                        })}
+                      </div>
                       <div className="tnum mt-0.5 font-mono font-semibold">
                         {fmtPrice(payload[0].value as number, currency)}
                       </div>

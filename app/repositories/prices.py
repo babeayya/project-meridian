@@ -58,6 +58,22 @@ class PriceRepository:
         stmt = stmt.order_by(PriceDaily.date)
         return list((await self.session.execute(stmt)).scalars().all())
 
+    async def last_fetched_at(self, listing_id: uuid.UUID) -> datetime | None:
+        """When this listing's bars were last pulled from a provider — used to
+        throttle re-ingestion without re-reading the whole series.
+
+        Always UTC-aware: DateTime(timezone=True) round-trips as aware on
+        Postgres but naive on SQLite, and the two cannot be compared.
+        """
+        stmt = (
+            select(PriceDaily.fetched_at)
+            .where(PriceDaily.listing_id == listing_id)
+            .order_by(PriceDaily.fetched_at.desc())
+            .limit(1)
+        )
+        ts = (await self.session.execute(stmt)).scalar_one_or_none()
+        return ts.replace(tzinfo=UTC) if ts and ts.tzinfo is None else ts
+
     async def latest_date(self, listing_id: uuid.UUID) -> date | None:
         stmt = (
             select(PriceDaily.date)

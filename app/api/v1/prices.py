@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -13,6 +13,9 @@ from app.schemas.prices import PricePoint, PriceSeries, QuoteOut
 from app.services.ingestion.prices import RANGE_DAYS, PriceIngestionService
 
 router = APIRouter(prefix="/companies", tags=["prices"])
+
+# how long stored daily bars are served before the chain is walked again
+REFRESH_TTL = timedelta(hours=6)
 
 
 @router.get("/{company_id}/prices")
@@ -29,8 +32,14 @@ async def get_prices(
 
     start = date.today() - timedelta(days=RANGE_DAYS.get(range_, 366))
     rows = await prices.series(listing.id, start=start)
-    if not rows:
-        # first request for this company: ingest through the chain, then serve
+
+    # Re-ingest when there is nothing yet or the stored bars have gone stale.
+    # Refreshing only on an empty window left listings frozen at whatever depth
+    # their first-ever chart request happened to pull, so the quant engines
+    # (VaR, CAPM beta, rolling series) never had enough sessions to run.
+    last_fetch = await prices.last_fetched_at(listing.id)
+    stale = last_fetch is None or datetime.now(UTC) - last_fetch > REFRESH_TTL
+    if not rows or stale:
         await ingestion.refresh(company_id, range_ if range_ in RANGE_DAYS else "5y")
         rows = await prices.series(listing.id, start=start)
 
@@ -62,7 +71,7 @@ async def get_quote(
 
     quote = await prices.get_quote(listing.id)
     if quote is None:
-        await ingestion.refresh(company_id, "1m")
+        await ingestion.refresh(company_id, "5y")
         quote = await prices.get_quote(listing.id)
     if quote is None:
         raise EntityNotFound("No quote available for this listing yet")

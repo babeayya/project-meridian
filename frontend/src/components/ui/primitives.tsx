@@ -1,9 +1,13 @@
 "use client";
 /** Core UI primitives: hairline panels, badges, stats, skeletons. */
 import { motion, useInView } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
+
+/** Layout effects warn when rendered on the server; effects never run there. */
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 export function Panel({
   className, children, hover = false,
@@ -62,28 +66,58 @@ export function Stat({
   );
 }
 
-/** Smoothly counts to a numeric value; renders via a formatter. */
+/** Smoothly counts to a numeric value; renders via a formatter.
+ *
+ *  The count-up is decoration — the number itself must always be true. State
+ *  is seeded with the real value so the server-rendered HTML and the pre-paint
+ *  client render both carry it, and the animation is driven from a layout
+ *  effect so rewinding to the start is never painted. A fabricated $0.00 in a
+ *  price stat is worse than no animation. */
 export function CountUp({
   value, format, duration = 0.8, className,
 }: { value: number; format: (n: number) => string; duration?: number; className?: string }) {
-  const [display, setDisplay] = useState(0);
-  const started = useRef(false);
-  const from = useRef(0);
+  const [display, setDisplay] = useState(value);
+  const from = useRef<number | null>(null);   // null until the first run
 
-  useEffect(() => {
-    const start = performance.now();
-    const initial = started.current ? from.current : 0;
-    started.current = true;
+  useIsomorphicLayoutEffect(() => {
+    const target = value;
+    const initial = from.current ?? 0;        // count up from zero on mount
+    if (initial === target) {
+      from.current = target;
+      return;
+    }
+
+    // requestAnimationFrame is suspended while the tab is hidden, so an
+    // animation started here would strand the display on the initial value —
+    // zero on mount — until the tab is focused. Commit and skip instead.
+    if (document.hidden) {
+      from.current = target;
+      setDisplay(target);
+      return;
+    }
+
     let raf = 0;
+    const settle = () => {
+      cancelAnimationFrame(raf);
+      from.current = target;
+      setDisplay(target);
+    };
+    const start = performance.now();
     const tick = (t: number) => {
       const p = Math.min((t - start) / (duration * 1000), 1);
       const eased = 1 - Math.pow(1 - p, 3);
-      setDisplay(initial + (value - initial) * eased);
+      setDisplay(initial + (target - initial) * eased);
       if (p < 1) raf = requestAnimationFrame(tick);
-      else from.current = value;
+      else from.current = target;
     };
+    setDisplay(initial);
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    // being hidden mid-count would otherwise freeze an interpolated number
+    document.addEventListener("visibilitychange", settle);
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", settle);
+    };
   }, [value, duration]);
 
   return <span className={cn("tnum", className)}>{format(display)}</span>;
