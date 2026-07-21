@@ -62,3 +62,24 @@ def test_momentum_stats():
     assert m["return_6m"] is not None
     assert m["return_12m"] is not None
     assert m["pct_off_52w_high"] is not None and m["pct_off_52w_high"] <= 0
+
+
+def test_short_benchmark_overlap_yields_no_beta():
+    """A truncated benchmark response (Yahoo throttling a 2y request down to a
+    couple of months) collapses the overlap. A fit that short is biased, not
+    just noisy — JPM measured 0.23 over 60 sessions against 0.95 over 499 —
+    and it feeds WACC, so no beta is better than that one."""
+    s = make_series(n=400)
+    truncated = engine.PriceSeries(dates=s.dates[-70:], closes=s.closes[-70:])
+    perf = engine.performance(s, truncated, rf_annual=0.04)
+    assert perf is not None                 # non-beta metrics still stand
+    assert perf.annualized_volatility > 0
+    assert perf.beta is None
+    assert perf.treynor is None and perf.jensen_alpha is None
+
+
+def test_full_benchmark_overlap_still_reports_beta():
+    s = make_series(n=400)
+    bench = make_series(n=400, seed=9)
+    perf = engine.performance(s, bench, rf_annual=0.04)
+    assert perf is not None and perf.beta is not None

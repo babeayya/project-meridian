@@ -6,7 +6,12 @@ from decimal import Decimal
 import structlog
 
 from app.core.errors import AppError, EntityNotFound
-from app.domain.quant.engine import PriceSeries, capm, daily_log_returns
+from app.domain.quant.engine import (
+    MIN_BETA_OBSERVATIONS,
+    PriceSeries,
+    capm,
+    daily_log_returns,
+)
 from app.domain.statements.classification import is_financial
 from app.domain.statements.history import FinancialHistory
 from app.domain.valuation.advanced import (
@@ -219,9 +224,7 @@ class ValuationService:
 
     async def _beta(self, company_id: uuid.UUID, region: Region) -> tuple[Decimal, str]:
         stock = await self.financials.price_series(company_id, days=750)
-        # capm() enforces its own ≥60-observation minimum; gating harder here
-        # only meant thinly-ingested listings silently reported β = 1.00
-        if stock is None or len(stock.closes) < 61:
+        if stock is None or len(stock.closes) < MIN_BETA_OBSERVATIONS:
             n = 0 if stock is None else len(stock.closes)
             return (Decimal("1.0"),
                     f"assumption:default (insufficient price history, {n} sessions)")
@@ -237,13 +240,24 @@ class ValuationService:
             from app.domain.quant.engine import align
             ra, rb = align(stock, bench)
             model = capm(ra, rb, 0.04)
+            # A truncated benchmark response (Yahoo throttles, and a 2y request
+            # can come back with a couple of months) silently collapses the
+            # overlap, and a beta fitted to that is not merely noisy but
+            # biased: JPM measures 0.23 over 60 sessions against 0.95 over 499.
+            # That feeds WACC and every DCF, so a short overlap is treated as a
+            # failed fetch rather than a usable estimate.
+            if model and model.observations < MIN_BETA_OBSERVATIONS:
+                log.warning("beta_window_too_short", company_id=str(company_id),
+                            observations=model.observations,
+                            benchmark=bench_raw["symbol"])
+                return (Decimal("1.0"),
+                        f"assumption:default (only {model.observations} sessions "
+                        f"overlapped {bench_raw['symbol']}; "
+                        f"≥{MIN_BETA_OBSERVATIONS} required for a stable fit)")
             if model:
-                # <1y of overlap is a noisy fit — still far better than the
-                # 1.0 placeholder, but the trace has to say so
-                short = " — short window" if model.observations < 250 else ""
                 return (Decimal(str(model.beta)),
                         f"computed:{model.observations}d daily OLS vs "
-                        f"{bench_raw['symbol']} (R²={model.r_squared}){short}")
+                        f"{bench_raw['symbol']} (R²={model.r_squared})")
         except Exception as exc:
             log.warning("beta_computation_failed", error=str(exc)[:200])
         vol = daily_log_returns(stock)

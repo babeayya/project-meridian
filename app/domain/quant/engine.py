@@ -7,6 +7,12 @@ from pydantic import BaseModel, Field
 
 TRADING_DAYS = 252
 
+# Overlapping daily observations required before a beta is reported. capm()
+# will fit 60, but a fit that short is biased rather than merely noisy — the
+# same stock can measure 0.23 over 60 sessions and 0.95 over 499 — so anything
+# consuming beta for pricing must hold to this floor.
+MIN_BETA_OBSERVATIONS = 250
+
 
 class PriceSeries(BaseModel):
     dates: list[date]
@@ -129,7 +135,9 @@ def performance(stock: PriceSeries, bench: PriceSeries | None,
     if bench is not None:
         ra, rb = align(stock, bench)
         model = capm(ra, rb, rf_annual)
-        if model:
+        # A truncated benchmark response collapses the overlap; reporting a
+        # beta off the remainder would understate systematic risk badly.
+        if model and model.observations >= MIN_BETA_OBSERVATIONS:
             beta = model.beta
             jensen = model.alpha_annual
             if beta:
