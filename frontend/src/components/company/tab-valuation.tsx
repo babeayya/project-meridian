@@ -167,6 +167,14 @@ function DcfPlayground({ id }: { id: string }) {
                     <span className="label">Confidence</span>
                     <ConfidenceMeter value={outcome.confidence} />
                   </div>
+                  {outcome.warnings?.map((w) => (
+                    <p
+                      key={w}
+                      className="mt-3 rounded-md border border-warn/30 bg-warn/10 px-2.5 py-2 text-[11px] leading-snug text-warn"
+                    >
+                      {w}
+                    </p>
+                  ))}
                   <button
                     onClick={() => setShowTrace((v) => !v)}
                     className="mt-3 text-left text-[11px] text-accent hover:underline"

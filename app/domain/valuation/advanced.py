@@ -351,6 +351,7 @@ def summarize(outcomes: list[ValuationOutcome],
         "high": str(o.high) if o.high is not None else None,
         "confidence": o.confidence,
         "weight": SUMMARY_WEIGHTS.get(o.model, 0.05),
+        "warnings": o.warnings,
     } for o in usable]
     skipped = [{"model": o.model, "reason": o.not_applicable_reason}
                for o in outcomes if o.status != "ok"]

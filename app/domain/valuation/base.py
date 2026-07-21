@@ -17,11 +17,24 @@ class ValuationOutcome(BaseModel):
     confidence: float = 0.0
     outputs: dict = Field(default_factory=dict)
     trace: CalcNode | None = None
+    warnings: list[str] = Field(default_factory=list)
 
     @classmethod
     def na(cls, model: str, reason: str, currency: str = "USD") -> "ValuationOutcome":
         return cls(model=model, status="not_applicable",
                    not_applicable_reason=reason, currency=currency)
+
+    def caveat(self, reason: str, confidence_factor: float) -> "ValuationOutcome":
+        """Attach a methodological warning and discount the model's confidence.
+
+        Used where a model still produces a defensible number but rests on an
+        assumption that does not hold for this filer. The result stays in the
+        football field — hiding it would silently shift the whole blend onto
+        the remaining models — but it carries less weight and says why.
+        """
+        self.warnings.append(reason)
+        self.confidence = round(self.confidence * confidence_factor, 4)
+        return self
 
 
 class WaccInputs(BaseModel):

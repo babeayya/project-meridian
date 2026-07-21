@@ -193,6 +193,9 @@ export interface ValuationOutcome {
   confidence: number;
   outputs: Record<string, unknown>;
   trace: CalcNode | null;
+  /** Methodological caveats — the model still ran, but an assumption behind
+   *  it does not hold for this filer (e.g. enterprise DCF on a bank). */
+  warnings: string[];
   run_id?: string;
 }
 export interface FootballFieldEntry {
@@ -202,6 +205,7 @@ export interface FootballFieldEntry {
   high: string | null;
   confidence: number;
   weight: number;
+  warnings: string[];
 }
 export interface ValuationSummary {
   football_field: FootballFieldEntry[];
